@@ -1,12 +1,12 @@
 # Data Quality Report
-Generated: 2026-03-14 04:32:16
+Generated: 2026-03-15 12:49:42
 
 ## Summary
 - Total records examined: 20,000
-- Issues found: 3,715
+- Issues found: 3,708
 - Issues resolved: 2,515
-- Issues remaining: 1,200
-- Cleaning time: 0.20s
+- Issues remaining: 1,193
+- Cleaning time: 0.23s
 
 ## Issues Detail
 ### Negative Paid Amounts
@@ -41,23 +41,23 @@ Generated: 2026-03-14 04:32:16
 
 ### Future Dates
 - Found: 1 records — report_date values set in the future
-- Remaining: 1,200
+- Remaining: 1,193
 
 ### Future Dates
-- Found: 1,199 records — close_date values set in the future
-- Remaining: 1,200
+- Found: 1,192 records — close_date values set in the future
+- Remaining: 1,193
 
 ## Before/After Comparison
 | Metric | Before | After |
 |--------|--------|-------|
 | Extreme Outliers | 8 | 0 |
-| Future Dates | 1,200 | 1,200 |
+| Future Dates | 1,193 | 1,193 |
 | Mixed-Case State Codes | 616 | 0 |
 | Negative Paid Amounts | 383 | 0 |
 | Null Diagnosis Codes | 793 | 0 |
 | Swapped Dates | 412 | 0 |
 | Text Severity Values | 303 | 0 |
-| **Total** | **3,715** | **1,200** |
+| **Total** | **3,708** | **1,193** |
 
 ## Column Null Counts (After Cleaning)
 | Column | Null Count |

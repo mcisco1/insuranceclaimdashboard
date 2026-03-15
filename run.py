@@ -32,11 +32,11 @@ if str(_PROJECT_ROOT) not in sys.path:
 # Banner
 # ══════════════════════════════════════════════════════════════════════════════
 
-_BANNER = r"""
-╔══════════════════════════════════════════════════════════════╗
-║   Insurance Claims & Clinical Risk Intelligence Dashboard   ║
-║                     Data Pipeline Runner                    ║
-╚══════════════════════════════════════════════════════════════╝
+_BANNER = """
+================================================================
+   Insurance Claims & Clinical Risk Intelligence Dashboard
+                     Data Pipeline Runner
+================================================================
 """
 
 
