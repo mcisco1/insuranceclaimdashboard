@@ -97,11 +97,11 @@ def layout(data_store) -> html.Div:
             html.Div(
                 [
                     html.Div(
-                        dcc.Graph(id="trends-monthly-type", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="trends-monthly-type", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                     html.Div(
-                        dcc.Graph(id="trends-monthly-severity-area", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="trends-monthly-severity-area", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                 ],
@@ -112,11 +112,11 @@ def layout(data_store) -> html.Div:
             html.Div(
                 [
                     html.Div(
-                        dcc.Graph(id="trends-paid-incurred", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="trends-paid-incurred", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                     html.Div(
-                        dcc.Graph(id="trends-loss-ratio", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="trends-loss-ratio", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                 ],
@@ -127,11 +127,11 @@ def layout(data_store) -> html.Div:
             html.Div(
                 [
                     html.Div(
-                        dcc.Graph(id="trends-severity-mix", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="trends-severity-mix", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                     html.Div(
-                        dcc.Graph(id="trends-treemap", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="trends-treemap", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                 ],

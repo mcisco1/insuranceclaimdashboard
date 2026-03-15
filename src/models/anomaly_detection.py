@@ -279,6 +279,50 @@ def detect_anomalies(
     # ── Trend breaks ─────────────────────────────────────────────────
     trend_breaks = _compute_trend_breaks(df, anomaly_flags)
 
+    # ── SHAP explainability ──────────────────────────────────────
+    shap_values_arr = None
+    anomaly_explanations = []
+    feature_names = features_used
+
+    try:
+        import shap
+        explainer = shap.TreeExplainer(iso_forest)
+        shap_vals = explainer.shap_values(X_scaled)
+
+        shap_values_arr = shap_vals
+
+        # For each anomaly, extract top-3 contributing features
+        anomaly_indices = anomaly_flags[anomaly_flags].index
+        for idx in anomaly_indices:
+            pos = df.index.get_loc(idx)
+            if isinstance(pos, (int, np.integer)):
+                sv = shap_vals[pos]
+                abs_sv = np.abs(sv)
+                top3_idx = np.argsort(abs_sv)[-3:][::-1]
+                reasons = [
+                    {
+                        "feature": feature_names[fi],
+                        "shap_value": float(sv[fi]),
+                    }
+                    for fi in top3_idx
+                ]
+                anomaly_explanations.append({
+                    "index": idx,
+                    "top_reasons": reasons,
+                    "top_reason_text": reasons[0]["feature"] if reasons else "",
+                })
+
+        logger.info("SHAP values computed for %d features.", len(feature_names))
+    except ImportError:
+        logger.warning("shap not installed; SHAP explainability skipped.")
+    except Exception as exc:
+        logger.warning("SHAP computation failed: %s", exc)
+
+    # Add top reason to anomaly_claims
+    if anomaly_explanations:
+        reason_map = {e["index"]: e["top_reason_text"] for e in anomaly_explanations}
+        anomaly_claims["top_reason"] = anomaly_claims.index.map(reason_map).fillna("")
+
     return {
         "anomaly_flags": anomaly_flags,
         "anomaly_count": anomaly_count,
@@ -287,4 +331,7 @@ def detect_anomalies(
         "anomaly_scores": anomaly_scores,
         "feature_summary": feature_summary,
         "trend_breaks": trend_breaks,
+        "shap_values": shap_values_arr,
+        "anomaly_explanations": anomaly_explanations,
+        "feature_names": feature_names,
     }

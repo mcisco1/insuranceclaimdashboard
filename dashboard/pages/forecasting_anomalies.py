@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 from dash import Input, Output, State, dash_table, dcc, html
 from dash.exceptions import PreventUpdate
 
-from dashboard.components import create_download_button, create_kpi_card
+from dashboard.components import create_download_button, create_kpi_card, create_info_tooltip
 
 # ---------------------------------------------------------------------------
 # Colour palette
@@ -88,6 +88,16 @@ def layout(data_store) -> html.Div:
         f"{model_aic:,.1f}" if not np.isnan(model_aic) else "N/A",
         delta=forecast_data.get("model_params", {}).get("method", "").replace("_", " ").title(),
         delta_color=PRIMARY,
+    )
+
+    # Backtest MAPE KPI
+    backtest = forecast_data.get("backtest", {})
+    backtest_mape = backtest.get("mape")
+    kpi_backtest = create_kpi_card(
+        "Backtest MAPE",
+        f"{backtest_mape:.1f}%" if backtest_mape is not None else "N/A",
+        delta="6-month holdout" if backtest_mape is not None else "Insufficient data",
+        delta_color=SUCCESS if backtest_mape is not None and backtest_mape < 15 else WARNING,
     )
 
     # ── Forecast chart ────────────────────────────────────────────────
@@ -184,6 +194,123 @@ def layout(data_store) -> html.Div:
         yaxis_title="Claim Count",
         legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
         height=440,
+    )
+
+    # ── Model comparison chart ─────────────────────────────────────────
+    model_comparison = severity_model.get("model_comparison", {})
+    model_comp_fig = go.Figure()
+    rankings = model_comparison.get("rankings", [])
+    if rankings:
+        names = [r["name"] for r in rankings]
+        f1_means = [r["f1_mean"] for r in rankings]
+        f1_stds = [r["f1_std"] for r in rankings]
+        model_comp_fig.add_trace(go.Bar(
+            x=names, y=f1_means,
+            error_y=dict(type="data", array=f1_stds, visible=True),
+            marker_color=[PRIMARY, ACCENT, SUCCESS][:len(names)],
+            hovertemplate="<b>%{x}</b><br>F1-macro: %{y:.4f}<extra></extra>",
+        ))
+        # Annotate statistical test
+        stat_test = model_comparison.get("statistical_test", {})
+        if stat_test:
+            sig = "significant" if stat_test.get("significant") else "not significant"
+            annotation = f"Paired t-test: {stat_test.get('model_a', '')} vs {stat_test.get('model_b', '')}: p={stat_test.get('p_value', 0):.4f} ({sig})"
+            model_comp_fig.add_annotation(
+                text=annotation, xref="paper", yref="paper",
+                x=0.5, y=-0.18, showarrow=False, font=dict(size=10, color="#64748b"),
+            )
+    model_comp_fig.update_layout(
+        **_COMMON_LAYOUT,
+        title=dict(text="Model Comparison: 5-Fold CV F1-Macro (+/- Std)", font=dict(size=14)),
+        xaxis_title="Model",
+        yaxis_title="F1-Macro Score",
+        showlegend=False,
+        height=400,
+    )
+
+    # ── Calibration curve ─────────────────────────────────────────────
+    calibration_curves = model_comparison.get("calibration_curves", {})
+    cal_fig = go.Figure()
+    cal_colors = [PRIMARY, ACCENT, SUCCESS]
+    for idx, (model_name, cal_data) in enumerate(calibration_curves.items()):
+        fractions = cal_data.get("fractions", [])
+        means = cal_data.get("mean_predicted", [])
+        if fractions and means:
+            # Average across classes for the reliability diagram
+            avg_frac = np.mean(fractions, axis=0) if len(fractions) > 0 else []
+            avg_mean = np.mean(means, axis=0) if len(means) > 0 else []
+            if len(avg_frac) > 0:
+                cal_fig.add_trace(go.Scatter(
+                    x=avg_mean, y=avg_frac,
+                    mode="lines+markers",
+                    name=model_name,
+                    line=dict(width=2, color=cal_colors[idx % len(cal_colors)]),
+                    marker=dict(size=6),
+                ))
+    # Perfect calibration line
+    cal_fig.add_trace(go.Scatter(
+        x=[0, 1], y=[0, 1],
+        mode="lines", name="Perfect",
+        line=dict(width=1, color="#94a3b8", dash="dash"),
+        showlegend=True,
+    ))
+    cal_fig.update_layout(
+        **_COMMON_LAYOUT,
+        title=dict(text="Calibration Curve (Reliability Diagram)", font=dict(size=14)),
+        xaxis_title="Mean Predicted Probability",
+        yaxis_title="Fraction of Positives",
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+        height=400,
+    )
+
+    # ── Backtest actual vs forecast ───────────────────────────────────
+    backtest_fig = go.Figure()
+    avf = backtest.get("actual_vs_forecast", [])
+    if avf:
+        dates_bt = [r["date"] for r in avf]
+        actuals_bt = [r["actual"] for r in avf]
+        forecasts_bt = [r["forecast"] for r in avf]
+        backtest_fig.add_trace(go.Scatter(
+            x=dates_bt, y=actuals_bt,
+            mode="lines+markers", name="Actual",
+            line=dict(width=2, color=PRIMARY),
+        ))
+        backtest_fig.add_trace(go.Scatter(
+            x=dates_bt, y=forecasts_bt,
+            mode="lines+markers", name="Forecast",
+            line=dict(width=2, color=ACCENT, dash="dash"),
+        ))
+    backtest_fig.update_layout(
+        **_COMMON_LAYOUT,
+        title=dict(text="Backtest: Actual vs Forecast (6-Month Holdout)", font=dict(size=14)),
+        xaxis_title="Month",
+        yaxis_title="Claim Count",
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+        height=350,
+    )
+
+    # ── SHAP summary chart ────────────────────────────────────────────
+    shap_vals = anomaly_data.get("shap_values")
+    shap_feature_names = anomaly_data.get("feature_names", [])
+    shap_fig = go.Figure()
+    if shap_vals is not None and len(shap_feature_names) > 0:
+        mean_abs_shap = np.mean(np.abs(shap_vals), axis=0)
+        sorted_idx = np.argsort(mean_abs_shap)
+        sorted_names = [shap_feature_names[i].replace("_", " ").title() for i in sorted_idx]
+        sorted_values = mean_abs_shap[sorted_idx]
+        shap_fig.add_trace(go.Bar(
+            x=sorted_values, y=sorted_names,
+            orientation="h",
+            marker_color=PRIMARY,
+            hovertemplate="<b>%{y}</b><br>Mean |SHAP|: %{x:.4f}<extra></extra>",
+        ))
+    shap_fig.update_layout(
+        **_COMMON_LAYOUT,
+        title=dict(text="SHAP Feature Importance for Anomaly Detection", font=dict(size=14)),
+        xaxis_title="Mean |SHAP Value|",
+        yaxis_title="",
+        showlegend=False,
+        height=350,
     )
 
     # ── Anomaly scatter plot ──────────────────────────────────────────
@@ -290,7 +417,7 @@ def layout(data_store) -> html.Div:
 
     # ── Flagged claims table ──────────────────────────────────────────
     anomaly_claims = anomaly_data.get("anomaly_claims", pd.DataFrame())
-    table_columns = ["claim_id", "paid_amount", "severity_level", "days_to_close", "specialty", "anomaly_score"]
+    table_columns = ["claim_id", "paid_amount", "severity_level", "days_to_close", "specialty", "anomaly_score", "top_reason"]
 
     if not anomaly_claims.empty:
         # Ensure columns exist
@@ -318,6 +445,7 @@ def layout(data_store) -> html.Div:
             "days_to_close": "Days to Close",
             "specialty": "Specialty",
             "anomaly_score": "Anomaly Score",
+            "top_reason": "Top Reason",
         }
         display_columns = [{"name": column_labels.get(c, c), "id": c} for c in available_cols]
         display_data = table_data.to_dict("records")
@@ -360,11 +488,21 @@ def layout(data_store) -> html.Div:
 
     return html.Div(
         [
-            html.H2("Claims Forecasting & Anomaly Detection", className="page-title"),
+            html.H2(
+                [
+                    "Claims Forecasting & Anomaly Detection",
+                    create_info_tooltip(
+                        "Isolation Forest (contamination=5%). SHAP values explain individual flags. "
+                        "Walk-forward backtest validates forecast accuracy.",
+                        "forecast-tooltip",
+                    ),
+                ],
+                className="page-title",
+            ),
 
             # Row 1: KPI cards
             html.Div(
-                [kpi_forecast_next, kpi_forecast_total, kpi_anomaly_rate, kpi_aic],
+                [kpi_forecast_next, kpi_forecast_total, kpi_anomaly_rate, kpi_aic, kpi_backtest],
                 className="kpi-row",
             ),
 

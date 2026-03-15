@@ -9,11 +9,12 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, State, dcc, html
 from dash.exceptions import PreventUpdate
 
-from dashboard.components import create_download_button, create_kpi_card
+from dashboard.components import create_download_button, create_kpi_card, create_info_tooltip
 
 # ---------------------------------------------------------------------------
 # Colour palette
@@ -127,6 +128,7 @@ def _build_scenario_card(
 def layout(data_store) -> html.Div:
     """Return the Scenario Analysis & Benchmarks page layout."""
     scenarios = data_store.scenarios
+    monte_carlo = data_store.monte_carlo
     benchmarks = data_store.benchmarks
 
     # ── Build PSI benchmark bar chart ─────────────────────────────────
@@ -260,9 +262,68 @@ def layout(data_store) -> html.Div:
     combined_pct = combined.get("pct_change", 0)
     components = combined.get("components", {})
 
+    # Monte Carlo histogram
+    mc_dist = monte_carlo.get("distribution", [])
+    mc_fig = go.Figure()
+    if mc_dist:
+        mc_fig.add_trace(go.Histogram(
+            x=mc_dist,
+            nbinsx=60,
+            marker_color=PRIMARY,
+            opacity=0.85,
+            hovertemplate="Savings: $%{x:,.0f}<br>Count: %{y:,}<extra></extra>",
+        ))
+        # Percentile lines
+        p5 = monte_carlo.get("p5", 0)
+        p95 = monte_carlo.get("p95", 0)
+        mc_fig.add_vline(x=p5, line_dash="dash", line_color=ACCENT,
+                         annotation_text=f"5th pctl: {_fmt_currency(p5)}",
+                         annotation_position="top left", annotation_font_size=10)
+        mc_fig.add_vline(x=p95, line_dash="dash", line_color=SUCCESS,
+                         annotation_text=f"95th pctl: {_fmt_currency(p95)}",
+                         annotation_position="top right", annotation_font_size=10)
+        median_val = monte_carlo.get("median_savings", 0)
+        mc_fig.add_vline(x=median_val, line_dash="solid", line_color=SECONDARY,
+                         annotation_text=f"Median: {_fmt_currency(median_val)}",
+                         annotation_position="top", annotation_font_size=10)
+    mc_fig.update_layout(
+        **_COMMON_LAYOUT,
+        title=dict(text="Monte Carlo Simulation: Savings Distribution (5,000 simulations)", font=dict(size=14)),
+        xaxis_title="Potential Savings ($)",
+        xaxis=dict(tickformat="$,.0f"),
+        yaxis_title="Frequency",
+        showlegend=False,
+        height=420,
+    )
+
+    mc_var = monte_carlo.get("var_95", 0)
+    mc_prob = monte_carlo.get("prob_positive", 0)
+    kpi_var = create_kpi_card(
+        "95% VaR",
+        _fmt_currency(mc_var),
+        delta="5th percentile of savings",
+        delta_color=WARNING,
+    )
+    kpi_prob = create_kpi_card(
+        "P(Savings > 0)",
+        f"{mc_prob:.1f}%",
+        delta="Monte Carlo estimate",
+        delta_color=SUCCESS if mc_prob > 90 else WARNING,
+    )
+
     return html.Div(
         [
-            html.H2("What-If Scenario Analysis & Benchmarks", className="page-title"),
+            html.H2(
+                [
+                    "What-If Scenario Analysis & Benchmarks",
+                    create_info_tooltip(
+                        "Monte Carlo simulation (5,000 draws) with Beta-distributed parameter uncertainty. "
+                        "Deterministic scenarios provide point estimates; MC provides distributions.",
+                        "scenario-tooltip",
+                    ),
+                ],
+                className="page-title",
+            ),
 
             # Row 1: Sliders
             html.Div(
@@ -455,6 +516,25 @@ def layout(data_store) -> html.Div:
                 className="chart-row",
             ),
 
+            # Monte Carlo KPIs
+            html.Div(
+                [kpi_var, kpi_prob],
+                className="kpi-row",
+            ),
+
+            # Monte Carlo histogram
+            html.Div(
+                html.Div(
+                    dcc.Graph(
+                        id="scenario-mc-histogram",
+                        figure=mc_fig,
+                        config={"displayModeBar": False},
+                    ),
+                    className="card full-card",
+                ),
+                className="chart-row",
+            ),
+
             # Row 4: PSI benchmark comparison
             html.Div(
                 html.Div(
@@ -559,6 +639,8 @@ def register_callbacks(app, data_store) -> None:
             scenario = sev_scenarios.get(key, {})
             proj_incurred = scenario.get("new_total_incurred", baseline_incurred)
             pct_ch = scenario.get("pct_change", 0)
+            if isinstance(pct_ch, dict):
+                pct_ch = 0
             sev_pct_change = f"{pct_ch:+.1f}%"
 
         sev_savings = baseline_incurred - proj_incurred
@@ -590,6 +672,8 @@ def register_callbacks(app, data_store) -> None:
             scenario = lit_scenarios.get(key, {})
             proj_lit_incurred = scenario.get("new_total_incurred", baseline_lit_incurred)
             pct_ch = scenario.get("pct_change", 0)
+            if isinstance(pct_ch, dict):
+                pct_ch = 0
             lit_pct_change = f"{pct_ch:+.1f}%"
 
         lit_savings = baseline_lit_incurred - proj_lit_incurred

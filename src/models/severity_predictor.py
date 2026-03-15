@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
@@ -25,6 +25,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from config import RANDOM_SEED, TEST_SIZE
+from src.models.model_evaluation import compare_models
 
 logger = logging.getLogger(__name__)
 
@@ -250,18 +251,70 @@ def train_severity_model(
         .reset_index(drop=True)
     )
 
-    logger.info(
-        "RF accuracy: %.4f | LR accuracy: %.4f", rf_accuracy, lr_accuracy,
+    # ── Gradient Boosting pipeline ─────────────────────────────────
+    gbt_pipeline = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", GradientBoostingClassifier(
+            n_estimators=150,
+            max_depth=5,
+            learning_rate=0.1,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=seed,
+        )),
+    ])
+    gbt_pipeline.fit(X_train, y_train)
+    gbt_preds = gbt_pipeline.predict(X_test)
+    gbt_accuracy = float((gbt_preds == y_test).mean())
+    gbt_cls_report = classification_report(
+        y_test, gbt_preds, output_dict=True, zero_division=0,
     )
+
+    logger.info(
+        "RF accuracy: %.4f | LR accuracy: %.4f | GBT accuracy: %.4f",
+        rf_accuracy, lr_accuracy, gbt_accuracy,
+    )
+
+    # ── Cross-validated model comparison ───────────────────────────
+    comparison_models = {
+        "Random Forest": Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", RandomForestClassifier(
+                n_estimators=200, max_depth=15,
+                min_samples_split=5, min_samples_leaf=2,
+                class_weight="balanced", random_state=seed, n_jobs=-1,
+            )),
+        ]),
+        "Logistic Regression": Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", LogisticRegression(
+                max_iter=1000, solver="lbfgs",
+                class_weight="balanced", random_state=seed,
+            )),
+        ]),
+        "Gradient Boosting": Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", GradientBoostingClassifier(
+                n_estimators=150, max_depth=5, learning_rate=0.1,
+                min_samples_split=5, min_samples_leaf=2, random_state=seed,
+            )),
+        ]),
+    }
+
+    model_comparison = compare_models(X, y, comparison_models, cv=5, seed=seed)
 
     return {
         "rf_model": rf_pipeline,
         "lr_model": lr_pipeline,
+        "gbt_model": gbt_pipeline,
         "rf_accuracy": rf_accuracy,
         "lr_accuracy": lr_accuracy,
+        "gbt_accuracy": gbt_accuracy,
         "rf_report": rf_cls_report,
         "lr_report": lr_cls_report,
+        "gbt_report": gbt_cls_report,
         "feature_importances": importance_df,
         "confusion_matrix": rf_cm,
         "features_used": feature_names,
+        "model_comparison": model_comparison,
     }

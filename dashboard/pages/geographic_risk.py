@@ -83,7 +83,7 @@ def layout(data_store) -> html.Div:
             # Row 1: US choropleth map (full width)
             html.Div(
                 html.Div(
-                    dcc.Graph(id="geo-choropleth", config={"displayModeBar": False}),
+                    dcc.Loading(dcc.Graph(id="geo-choropleth", config={"displayModeBar": False}), type="circle"),
                     className="card full-card",
                 ),
                 className="chart-row",
@@ -93,11 +93,11 @@ def layout(data_store) -> html.Div:
             html.Div(
                 [
                     html.Div(
-                        dcc.Graph(id="geo-dept-heatmap", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="geo-dept-heatmap", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                     html.Div(
-                        dcc.Graph(id="geo-region-type-heatmap", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="geo-region-type-heatmap", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                 ],
@@ -108,11 +108,11 @@ def layout(data_store) -> html.Div:
             html.Div(
                 [
                     html.Div(
-                        dcc.Graph(id="geo-top-states", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="geo-top-states", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                     html.Div(
-                        dcc.Graph(id="geo-urban-rural", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="geo-urban-rural", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                 ],

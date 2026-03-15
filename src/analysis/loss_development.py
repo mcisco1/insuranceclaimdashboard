@@ -194,13 +194,155 @@ def build_loss_triangle(df: pd.DataFrame) -> Dict[str, Any]:
         "ibnr": round(total_ibnr, 2),
     }
 
+    # ── Mack standard errors ──────────────────────────────────────────
+    mack_se = _mack_standard_errors(
+        cum_triangle, triangle_masked, link_factors,
+        cum_factors, dev_years, acc_years, ultimate_losses,
+    )
+
     return {
         "triangle": triangle_dict,
         "age_to_age_factors": link_factors,
         "cumulative_factors": cum_factors,
         "ultimate_losses": ultimate_losses,
         "ibnr_reserves": ibnr_reserves,
+        "mack_standard_errors": mack_se,
     }
+
+
+def _mack_standard_errors(
+    cum_triangle: pd.DataFrame,
+    triangle_masked: pd.DataFrame,
+    link_factors: Dict[str, Optional[float]],
+    cum_factors: Dict[str, Optional[float]],
+    dev_years: list,
+    acc_years: list,
+    ultimate_losses: Dict[str, Dict[str, Optional[float]]],
+) -> Dict[str, Dict[str, Optional[float]]]:
+    """Implement Mack (1993) variance estimators for chain-ladder prediction intervals.
+
+    Returns per-accident-year IBNR estimate, standard error, and 95% CI.
+    """
+    n_dev = len(dev_years)
+    n_acc = len(acc_years)
+
+    if n_dev < 2 or n_acc < 2:
+        return {}
+
+    # Compute sigma^2_k -- Mack's variance of individual link ratios
+    # sigma^2_k = (1/(n_k - 1)) * sum over i of C_{i,k} * (f_{i,k+1}/C_{i,k} - f_k)^2
+    sigma_sq = {}
+    for k_idx in range(n_dev - 1):
+        d_curr = dev_years[k_idx]
+        d_next = dev_years[k_idx + 1]
+        key = f"{d_curr}-{d_next}"
+        f_k = link_factors.get(key)
+
+        if f_k is None:
+            sigma_sq[k_idx] = None
+            continue
+
+        # Get accident years that have both periods observed
+        both = triangle_masked[[d_curr, d_next]].dropna()
+        if len(both) <= 1:
+            sigma_sq[k_idx] = 0.0
+            continue
+
+        c_ik = both[d_curr].values
+        c_ik_next = both[d_next].values
+
+        # Individual link ratios
+        individual_factors = c_ik_next / np.where(c_ik == 0, np.nan, c_ik)
+        valid = ~np.isnan(individual_factors)
+
+        if valid.sum() <= 1:
+            sigma_sq[k_idx] = 0.0
+            continue
+
+        residuals = c_ik[valid] * (individual_factors[valid] - f_k) ** 2
+        sigma_sq[k_idx] = float(residuals.sum() / max(valid.sum() - 1, 1))
+
+    # For the last period, use extrapolation: sigma^2_{n-2} = min(sigma^2_{n-3}^2 / sigma^2_{n-4}, ...)
+    # Simplified: use the last available sigma_sq
+    if n_dev >= 3 and sigma_sq.get(n_dev - 2) is None:
+        sigma_sq[n_dev - 2] = sigma_sq.get(n_dev - 3, 0.0)
+
+    # Compute Mack SE for each accident year's IBNR
+    mack_results = {}
+    for ay in acc_years:
+        ay_str = str(ay)
+        ult_data = ultimate_losses.get(ay_str, {})
+        current_paid = ult_data.get("current_paid", 0.0)
+        ultimate = ult_data.get("ultimate")
+        latest_dev = ult_data.get("latest_dev_year")
+
+        if ultimate is None or latest_dev is None:
+            mack_results[ay_str] = {
+                "ibnr": 0.0,
+                "se": None,
+                "ci_lower": None,
+                "ci_upper": None,
+            }
+            continue
+
+        ibnr = ultimate - current_paid
+
+        # Find the index of latest_dev in dev_years
+        if latest_dev not in dev_years:
+            mack_results[ay_str] = {
+                "ibnr": round(ibnr, 2),
+                "se": None,
+                "ci_lower": None,
+                "ci_upper": None,
+            }
+            continue
+
+        dev_idx = dev_years.index(latest_dev)
+
+        # Mack's formula for process variance of the ultimate:
+        # Var(R_i) = C_{i,ultimate}^2 * sum_{k=I_i}^{n-1} (sigma^2_k / f_k^2) * (1/C_{i,k} + 1/S_k)
+        # where S_k = sum of C_{j,k} for accident years with data at period k
+        variance = 0.0
+        c_i_current = current_paid
+
+        for k_idx in range(dev_idx, n_dev - 1):
+            d_curr = dev_years[k_idx]
+            d_next = dev_years[k_idx + 1]
+            key = f"{d_curr}-{d_next}"
+            f_k = link_factors.get(key)
+            s2_k = sigma_sq.get(k_idx)
+
+            if f_k is None or f_k == 0 or s2_k is None:
+                continue
+
+            # S_k = sum of C_{j,k} for all accident years with data at period k
+            col_data = triangle_masked[d_curr].dropna()
+            s_k = float(col_data.sum()) if not col_data.empty else 0.0
+
+            if s_k == 0:
+                continue
+
+            # Accumulate variance term
+            inv_c = 1.0 / c_i_current if c_i_current > 0 else 0.0
+            inv_s = 1.0 / s_k
+            variance += (s2_k / (f_k ** 2)) * (inv_c + inv_s)
+
+            # Update c_i_current through the chain
+            c_i_current *= f_k
+
+        se = float(np.sqrt(variance)) * ultimate if variance > 0 else 0.0
+
+        ci_lower = max(0, ibnr - 1.96 * se)
+        ci_upper = ibnr + 1.96 * se
+
+        mack_results[ay_str] = {
+            "ibnr": round(ibnr, 2),
+            "se": round(se, 2),
+            "ci_lower": round(ci_lower, 2),
+            "ci_upper": round(ci_upper, 2),
+        }
+
+    return mack_results
 
 
 def _empty_result() -> Dict[str, Any]:
@@ -210,4 +352,5 @@ def _empty_result() -> Dict[str, Any]:
         "cumulative_factors": {},
         "ultimate_losses": {},
         "ibnr_reserves": {},
+        "mack_standard_errors": {},
     }

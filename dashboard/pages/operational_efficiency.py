@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 from dash import Input, Output, State, dash_table, dcc, html
 from dash.exceptions import PreventUpdate
 
-from dashboard.components import create_download_button, create_filter_panel, create_kpi_card
+from dashboard.components import create_download_button, create_filter_panel, create_kpi_card, create_info_tooltip
 
 # ---------------------------------------------------------------------------
 # Colour palette
@@ -46,6 +46,8 @@ def _apply_filters(
     claim_types: Optional[List[str]],
     severities: Optional[List[int]],
     regions: Optional[List[str]],
+    start_date=None,
+    end_date=None,
 ) -> pd.DataFrame:
     filtered = df.copy()
     if years:
@@ -56,6 +58,10 @@ def _apply_filters(
         filtered = filtered[filtered["severity_level"].isin(severities)]
     if regions:
         filtered = filtered[filtered["region"].isin(regions)]
+    if start_date:
+        filtered = filtered[pd.to_datetime(filtered["incident_date"], errors="coerce") >= pd.to_datetime(start_date)]
+    if end_date:
+        filtered = filtered[pd.to_datetime(filtered["incident_date"], errors="coerce") <= pd.to_datetime(end_date)]
     return filtered
 
 
@@ -76,10 +82,94 @@ def layout(data_store) -> html.Div:
     severities = sorted(df["severity_level"].dropna().unique())
     regions = sorted(df["region"].dropna().unique())
 
+    dates = pd.to_datetime(df["incident_date"], errors="coerce").dropna()
+    min_date = str(dates.min().date()) if not dates.empty else None
+    max_date = str(dates.max().date()) if not dates.empty else None
+
+    # Build Kaplan-Meier chart
+    survival = data_store.survival
+    km_fig = go.Figure()
+
+    curves_by_type = survival.get("curves_by_type", {})
+    if curves_by_type:
+        colors = ["#0f3460", "#e94560", "#00b894", "#fdcb6e", "#74b9ff"]
+        for idx, (ct, curve) in enumerate(sorted(curves_by_type.items())):
+            color = colors[idx % len(colors)]
+            timeline = curve.get("timeline", [])
+            surv = curve.get("survival", [])
+            ci_lo = curve.get("ci_lower", [])
+            ci_hi = curve.get("ci_upper", [])
+
+            km_fig.add_trace(go.Scatter(
+                x=timeline, y=surv,
+                mode="lines", name=ct,
+                line=dict(width=2, color=color),
+                hovertemplate=f"<b>{ct}</b><br>Day %{{x:.0f}}<br>Survival: %{{y:.1%}}<extra></extra>",
+            ))
+
+            if ci_lo and ci_hi:
+                km_fig.add_trace(go.Scatter(
+                    x=list(timeline) + list(timeline)[::-1],
+                    y=list(ci_hi) + list(ci_lo)[::-1],
+                    fill="toself",
+                    fillcolor=color.replace(")", ", 0.1)").replace("rgb", "rgba") if "rgb" in color else f"rgba({int(color[1:3],16)},{int(color[3:5],16)},{int(color[5:7],16)},0.1)",
+                    line=dict(width=0),
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
+    else:
+        overall = survival.get("overall_curve", {})
+        if overall:
+            km_fig.add_trace(go.Scatter(
+                x=overall.get("timeline", []),
+                y=overall.get("survival", []),
+                mode="lines", name="Overall",
+                line=dict(width=2, color=PRIMARY),
+            ))
+
+    median_surv = survival.get("median_survival_time")
+    if median_surv:
+        km_fig.add_hline(y=0.5, line_dash="dash", line_color="#94a3b8",
+                         annotation_text=f"Median: {median_surv:.0f} days",
+                         annotation_position="top right", annotation_font_size=10)
+
+    km_fig.update_layout(
+        **_COMMON_LAYOUT,
+        title=dict(text="Kaplan-Meier Survival Curve: Time to Close (handles open claims via censoring)", font=dict(size=14)),
+        xaxis_title="Days Since Report",
+        yaxis_title="Survival Probability",
+        yaxis=dict(tickformat=".0%"),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+        height=440,
+    )
+
     return html.Div(
         [
-            html.H2("Operational Efficiency", className="page-title"),
-            create_filter_panel(years, claim_types, severities, regions),
+            html.H2(
+                [
+                    "Operational Efficiency",
+                    create_info_tooltip(
+                        "Kaplan-Meier survival curves. Open claims treated as right-censored. "
+                        "Log-rank test for between-group significance.",
+                        "ops-tooltip",
+                    ),
+                ],
+                className="page-title",
+            ),
+            create_filter_panel(years, claim_types, severities, regions, min_date=min_date, max_date=max_date),
+
+            # Kaplan-Meier survival curve
+            html.Div(
+                html.Div(
+                    dcc.Graph(
+                        id="ops-km-curve",
+                        figure=km_fig,
+                        config={"displayModeBar": False},
+                    ),
+                    className="card full-card",
+                ),
+                className="chart-row",
+            ),
 
             # Row 1: KPI cards
             html.Div(id="ops-kpi-row", className="kpi-row"),
@@ -88,11 +178,11 @@ def layout(data_store) -> html.Div:
             html.Div(
                 [
                     html.Div(
-                        dcc.Graph(id="ops-close-histogram", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="ops-close-histogram", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                     html.Div(
-                        dcc.Graph(id="ops-aging-bar", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="ops-aging-bar", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                 ],
@@ -103,11 +193,11 @@ def layout(data_store) -> html.Div:
             html.Div(
                 [
                     html.Div(
-                        dcc.Graph(id="ops-lag-histogram", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="ops-lag-histogram", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                     html.Div(
-                        dcc.Graph(id="ops-lag-trend", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="ops-lag-trend", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                 ],
@@ -140,6 +230,8 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
     """Register all Operational Efficiency callbacks."""
 
     _filter_inputs = [
+        Input("filter-date-range", "start_date"),
+        Input("filter-date-range", "end_date"),
         Input("filter-year", "value"),
         Input("filter-claim-type", "value"),
         Input("filter-severity", "value"),
@@ -150,8 +242,8 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
     # KPI cards
     # ------------------------------------------------------------------
     @app.callback(Output("ops-kpi-row", "children"), _filter_inputs)
-    def _update_kpis(years, claim_types, severities, regions):
-        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions)
+    def _update_kpis(start_date, end_date, years, claim_types, severities, regions):
+        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions, start_date, end_date)
 
         closed = df.dropna(subset=["days_to_close"])
 
@@ -206,8 +298,8 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
     # Close time histogram (by severity)
     # ------------------------------------------------------------------
     @app.callback(Output("ops-close-histogram", "figure"), _filter_inputs)
-    def _close_histogram(years, claim_types, severities, regions):
-        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions)
+    def _close_histogram(start_date, end_date, years, claim_types, severities, regions):
+        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions, start_date, end_date)
         closed = df.dropna(subset=["days_to_close", "severity_level"]).copy()
         if closed.empty:
             return go.Figure().update_layout(**_COMMON_LAYOUT, title="Close Time Distribution")
@@ -258,8 +350,8 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
     # Aging bucket bar chart for open claims
     # ------------------------------------------------------------------
     @app.callback(Output("ops-aging-bar", "figure"), _filter_inputs)
-    def _aging_bar(years, claim_types, severities, regions):
-        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions)
+    def _aging_bar(start_date, end_date, years, claim_types, severities, regions):
+        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions, start_date, end_date)
         open_claims = df[df["status"].isin(["open", "reopened"])].copy()
 
         if open_claims.empty:
@@ -271,6 +363,7 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
         open_claims["incident_date"] = pd.to_datetime(open_claims["incident_date"], errors="coerce")
         reference = open_claims["report_date"].fillna(open_claims["incident_date"])
         open_claims["age_days"] = (today - reference).dt.days
+        open_claims = open_claims.dropna(subset=["age_days"])
 
         # Bucket the ages
         buckets = [
@@ -314,8 +407,8 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
     # Reporting lag distribution histogram
     # ------------------------------------------------------------------
     @app.callback(Output("ops-lag-histogram", "figure"), _filter_inputs)
-    def _lag_histogram(years, claim_types, severities, regions):
-        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions)
+    def _lag_histogram(start_date, end_date, years, claim_types, severities, regions):
+        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions, start_date, end_date)
         df = df.dropna(subset=["days_to_report"]).copy()
         if df.empty:
             return go.Figure().update_layout(**_COMMON_LAYOUT, title="Reporting Lag Distribution")
@@ -361,8 +454,8 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
     # Monthly reporting lag trend
     # ------------------------------------------------------------------
     @app.callback(Output("ops-lag-trend", "figure"), _filter_inputs)
-    def _lag_trend(years, claim_types, severities, regions):
-        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions)
+    def _lag_trend(start_date, end_date, years, claim_types, severities, regions):
+        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions, start_date, end_date)
         df = df.copy()
         df["_dt"] = pd.to_datetime(df["incident_date"], errors="coerce")
         df["month"] = df["_dt"].dt.to_period("M")
@@ -416,8 +509,8 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
     # SLA compliance table (by claim_type)
     # ------------------------------------------------------------------
     @app.callback(Output("ops-sla-table-container", "children"), _filter_inputs)
-    def _sla_table(years, claim_types, severities, regions):
-        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions)
+    def _sla_table(start_date, end_date, years, claim_types, severities, regions):
+        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions, start_date, end_date)
         closed = df.dropna(subset=["days_to_close"])
 
         if closed.empty:
@@ -547,6 +640,8 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
         Output("ops-download", "data"),
         Input("ops-btn", "n_clicks"),
         [
+            State("filter-date-range", "start_date"),
+            State("filter-date-range", "end_date"),
             State("filter-year", "value"),
             State("filter-claim-type", "value"),
             State("filter-severity", "value"),
@@ -554,10 +649,10 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
         ],
         prevent_initial_call=True,
     )
-    def _download_csv(n_clicks, years, claim_types, severities, regions):
+    def _download_csv(n_clicks, start_date, end_date, years, claim_types, severities, regions):
         if not n_clicks:
             raise PreventUpdate
-        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions)
+        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions, start_date, end_date)
         export_cols = [
             "claim_id", "incident_date", "report_date", "close_date",
             "claim_type", "severity_level", "status", "days_to_close",

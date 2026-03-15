@@ -7,13 +7,15 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, State, callback_context, dcc, html, dash_table
 from dash.exceptions import PreventUpdate
 
-from dashboard.components import create_download_button, create_filter_panel, create_kpi_card
+from dashboard.components import create_download_button, create_filter_panel, create_kpi_card, create_info_tooltip
+from src.analysis.statistical_utils import bootstrap_ci, proportional_ci
 
 # ---------------------------------------------------------------------------
 # Colour palette
@@ -69,6 +71,8 @@ def _apply_filters(
     claim_types: Optional[List[str]],
     severities: Optional[List[int]],
     regions: Optional[List[str]],
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
 ) -> pd.DataFrame:
     """Return a filtered copy of the claims DataFrame."""
     filtered = df.copy()
@@ -80,6 +84,10 @@ def _apply_filters(
         filtered = filtered[filtered["severity_level"].isin(severities)]
     if regions:
         filtered = filtered[filtered["region"].isin(regions)]
+    if start_date:
+        filtered = filtered[pd.to_datetime(filtered["incident_date"], errors="coerce") >= pd.to_datetime(start_date)]
+    if end_date:
+        filtered = filtered[pd.to_datetime(filtered["incident_date"], errors="coerce") <= pd.to_datetime(end_date)]
     return filtered
 
 
@@ -112,12 +120,25 @@ def layout(data_store) -> html.Div:
     severities = sorted(df["severity_level"].dropna().unique())
     regions = sorted(df["region"].dropna().unique())
 
+    dates = pd.to_datetime(df["incident_date"], errors="coerce").dropna()
+    min_date = str(dates.min().date()) if not dates.empty else None
+    max_date = str(dates.max().date()) if not dates.empty else None
+
     return html.Div(
         [
-            html.H2("Executive Overview", className="page-title"),
+            html.H2(
+                [
+                    "Executive Overview",
+                    create_info_tooltip(
+                        "Bootstrap CI (1,000 resamples). Wilson interval for proportions.",
+                        "exec-tooltip",
+                    ),
+                ],
+                className="page-title",
+            ),
 
             # Filter panel
-            create_filter_panel(years, claim_types, severities, regions),
+            create_filter_panel(years, claim_types, severities, regions, min_date=min_date, max_date=max_date),
 
             # KPI row
             html.Div(id="exec-kpi-row", className="kpi-row"),
@@ -126,11 +147,11 @@ def layout(data_store) -> html.Div:
             html.Div(
                 [
                     html.Div(
-                        dcc.Graph(id="exec-status-donut", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="exec-status-donut", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                     html.Div(
-                        dcc.Graph(id="exec-root-causes-bar", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="exec-root-causes-bar", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                 ],
@@ -141,11 +162,11 @@ def layout(data_store) -> html.Div:
             html.Div(
                 [
                     html.Div(
-                        dcc.Graph(id="exec-monthly-trend", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="exec-monthly-trend", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                     html.Div(
-                        dcc.Graph(id="exec-severity-bar", config={"displayModeBar": False}),
+                        dcc.Loading(dcc.Graph(id="exec-severity-bar", config={"displayModeBar": False}), type="circle"),
                         className="card half-card",
                     ),
                 ],
@@ -188,14 +209,16 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
     @app.callback(
         Output("exec-kpi-row", "children"),
         [
+            Input("filter-date-range", "start_date"),
+            Input("filter-date-range", "end_date"),
             Input("filter-year", "value"),
             Input("filter-claim-type", "value"),
             Input("filter-severity", "value"),
             Input("filter-region", "value"),
         ],
     )
-    def _update_kpis(years, claim_types, severities, regions):
-        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions)
+    def _update_kpis(start_date, end_date, years, claim_types, severities, regions):
+        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions, start_date, end_date)
 
         # Determine latest and prior years for YoY comparison
         all_years = sorted(df["accident_year"].dropna().unique())
@@ -230,12 +253,21 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
         d_text, d_color = _yoy_delta(paid_latest, paid_prior)
         sparkline_paid = _monthly_sparkline(df, "paid_amount")
 
+        # Bootstrap CI for Total Paid
+        paid_values = df["paid_amount"].dropna().values
+        if len(paid_values) > 10:
+            ci_result = bootstrap_ci(paid_values, np.sum)
+            ci_paid_text = f"95% CI: {_fmt_currency(ci_result['ci_lower'])} - {_fmt_currency(ci_result['ci_upper'])}"
+        else:
+            ci_paid_text = None
+
         kpi_paid = create_kpi_card(
             "Total Paid ($)",
             _fmt_currency(total_paid),
             delta=d_text,
             delta_color=d_color,
             sparkline_data=sparkline_paid,
+            ci_text=ci_paid_text,
         )
 
         # KPI 3: Avg Severity
@@ -244,11 +276,20 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
         avg_sev_prior = df_prior["severity_level"].mean() if not df_prior.empty else 0
         d_text, d_color = _yoy_delta(avg_sev_latest, avg_sev_prior)
 
+        # Bootstrap CI for Avg Severity
+        sev_values = df["severity_level"].dropna().values
+        if len(sev_values) > 10:
+            ci_sev = bootstrap_ci(sev_values, np.mean)
+            ci_sev_text = f"95% CI: {ci_sev['ci_lower']:.2f} - {ci_sev['ci_upper']:.2f}"
+        else:
+            ci_sev_text = None
+
         kpi_sev = create_kpi_card(
             "Avg Severity",
             f"{avg_sev:.2f}",
             delta=d_text,
             delta_color=d_color,
+            ci_text=ci_sev_text,
         )
 
         # KPI 4: Avg Days to Close
@@ -278,11 +319,21 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
         lit_p = df_prior["litigation_flag"].mean() * 100 if not df_prior.empty else 0
         d_text, d_color = _yoy_delta(lit_l, lit_p)
 
+        # Wilson CI for Litigation Rate
+        lit_successes = int(df["litigation_flag"].sum())
+        lit_trials = len(df)
+        if lit_trials > 10:
+            ci_lit = proportional_ci(lit_successes, lit_trials)
+            ci_lit_text = f"95% CI: {ci_lit['ci_lower']*100:.1f}% - {ci_lit['ci_upper']*100:.1f}%"
+        else:
+            ci_lit_text = None
+
         kpi_lit = create_kpi_card(
             "Litigation Rate (%)",
             _fmt_pct(lit_rate),
             delta=d_text,
             delta_color=d_color,
+            ci_text=ci_lit_text,
         )
 
         # KPI 6: Open Claims
@@ -306,14 +357,16 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
     @app.callback(
         Output("exec-status-donut", "figure"),
         [
+            Input("filter-date-range", "start_date"),
+            Input("filter-date-range", "end_date"),
             Input("filter-year", "value"),
             Input("filter-claim-type", "value"),
             Input("filter-severity", "value"),
             Input("filter-region", "value"),
         ],
     )
-    def _update_status_donut(years, claim_types, severities, regions):
-        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions)
+    def _update_status_donut(start_date, end_date, years, claim_types, severities, regions):
+        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions, start_date, end_date)
         status_counts = df["status"].value_counts()
 
         color_map = {"closed": SUCCESS, "open": WARNING, "reopened": ACCENT}
@@ -344,14 +397,16 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
     @app.callback(
         Output("exec-root-causes-bar", "figure"),
         [
+            Input("filter-date-range", "start_date"),
+            Input("filter-date-range", "end_date"),
             Input("filter-year", "value"),
             Input("filter-claim-type", "value"),
             Input("filter-severity", "value"),
             Input("filter-region", "value"),
         ],
     )
-    def _update_root_causes(years, claim_types, severities, regions):
-        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions)
+    def _update_root_causes(start_date, end_date, years, claim_types, severities, regions):
+        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions, start_date, end_date)
         top = df["root_cause_category"].value_counts().head(10).sort_values(ascending=True)
 
         fig = go.Figure(
@@ -379,14 +434,16 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
     @app.callback(
         Output("exec-monthly-trend", "figure"),
         [
+            Input("filter-date-range", "start_date"),
+            Input("filter-date-range", "end_date"),
             Input("filter-year", "value"),
             Input("filter-claim-type", "value"),
             Input("filter-severity", "value"),
             Input("filter-region", "value"),
         ],
     )
-    def _update_monthly_trend(years, claim_types, severities, regions):
-        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions)
+    def _update_monthly_trend(start_date, end_date, years, claim_types, severities, regions):
+        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions, start_date, end_date)
         df = df.copy()
         df["month"] = pd.to_datetime(df["incident_date"], errors="coerce").dt.to_period("M")
         df = df.dropna(subset=["month"])
@@ -427,14 +484,16 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
     @app.callback(
         Output("exec-severity-bar", "figure"),
         [
+            Input("filter-date-range", "start_date"),
+            Input("filter-date-range", "end_date"),
             Input("filter-year", "value"),
             Input("filter-claim-type", "value"),
             Input("filter-severity", "value"),
             Input("filter-region", "value"),
         ],
     )
-    def _update_severity_bar(years, claim_types, severities, regions):
-        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions)
+    def _update_severity_bar(start_date, end_date, years, claim_types, severities, regions):
+        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions, start_date, end_date)
         df = df.copy()
         df["year"] = pd.to_datetime(df["incident_date"], errors="coerce").dt.year
         df = df.dropna(subset=["year", "severity_level"])
@@ -472,6 +531,8 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
         Output("exec-overview-download", "data"),
         Input("exec-overview-btn", "n_clicks"),
         [
+            State("filter-date-range", "start_date"),
+            State("filter-date-range", "end_date"),
             State("filter-year", "value"),
             State("filter-claim-type", "value"),
             State("filter-severity", "value"),
@@ -479,10 +540,10 @@ def register_callbacks(app, data_store) -> None:  # noqa: C901
         ],
         prevent_initial_call=True,
     )
-    def _download_csv(n_clicks, years, claim_types, severities, regions):
+    def _download_csv(n_clicks, start_date, end_date, years, claim_types, severities, regions):
         if not n_clicks:
             raise PreventUpdate
-        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions)
+        df = _apply_filters(data_store.claims_df, years, claim_types, severities, regions, start_date, end_date)
         export_cols = [
             "claim_id", "incident_date", "claim_type", "severity_level",
             "status", "paid_amount", "incurred_amount", "root_cause_category",

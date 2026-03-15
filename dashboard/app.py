@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 import time
 import threading
@@ -12,6 +13,8 @@ import pandas as pd
 from dash import Dash, dcc, html
 from dash.dependencies import Input, Output
 from sqlalchemy import text
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Ensure project root is on sys.path so that ``config`` and ``src`` imports
@@ -31,7 +34,9 @@ from src.analysis import (  # noqa: E402
     analyze_repeat_incidents,
     calculate_benchmarks,
     run_scenarios,
+    analyze_survival,
 )
+from src.analysis.monte_carlo import monte_carlo_scenario  # noqa: E402
 from src.models import (  # noqa: E402
     train_severity_model,
     forecast_claims,
@@ -122,9 +127,10 @@ class DataStore:
                     "python run.py --step load)"
                 ) from exc
 
-        print(
-            f"[DataStore] Loaded {len(self.claims_df):,} claims "
-            f"from {url}"
+        logger.info(
+            "[DataStore] Loaded %s claims from %s",
+            f"{len(self.claims_df):,}",
+            url,
         )
 
         # ── Analysis modules ──────────────────────────────────────────────
@@ -137,6 +143,8 @@ class DataStore:
         self.repeat = analyze_repeat_incidents(df)
         self.benchmarks = calculate_benchmarks(df)
         self.scenarios = run_scenarios(df)
+        self.survival = analyze_survival(df)
+        self.monte_carlo = monte_carlo_scenario(df)
 
         # ── ML models ─────────────────────────────────────────────────────
         self.severity_model = train_severity_model(df)
@@ -144,7 +152,7 @@ class DataStore:
         self.anomalies = detect_anomalies(df)
 
         elapsed = time.perf_counter() - t0
-        print(f"[DataStore] All analyses complete in {elapsed:.1f}s")
+        logger.info("[DataStore] All analyses complete in %.1fs", elapsed)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -173,6 +181,9 @@ def create_app(data_store: Optional[DataStore] = None) -> Dash:
         suppress_callback_exceptions=True,
         assets_folder=str(Path(__file__).resolve().parent / "assets"),
         title="Insurance Claims Risk Intelligence",
+        meta_tags=[
+            {"name": "viewport", "content": "width=device-width, initial-scale=1.0"},
+        ],
     )
 
     # ── Layout ────────────────────────────────────────────────────────────

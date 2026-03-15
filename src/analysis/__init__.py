@@ -11,6 +11,8 @@ from src.analysis.reporting_lag import analyze_reporting_lag
 from src.analysis.repeat_incidents import analyze_repeat_incidents
 from src.analysis.benchmarks import calculate_benchmarks
 from src.analysis.scenario_analysis import run_scenarios
+from src.analysis.statistical_utils import bootstrap_ci, proportional_ci
+from src.analysis.survival_analysis import analyze_survival
 
 __all__ = [
     "analyze_frequency_severity",
@@ -20,4 +22,7 @@ __all__ = [
     "analyze_repeat_incidents",
     "calculate_benchmarks",
     "run_scenarios",
+    "bootstrap_ci",
+    "proportional_ci",
+    "analyze_survival",
 ]

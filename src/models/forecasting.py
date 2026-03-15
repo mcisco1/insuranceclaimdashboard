@@ -236,6 +236,9 @@ def forecast_claims(
         "Forecast generated for %d periods. AIC=%.2f", periods, aic_value,
     )
 
+    # ── Walk-forward backtest ─────────────────────────────────────
+    backtest = _backtest_forecast(series, holdout=6)
+
     return {
         "monthly_actuals": monthly,
         "forecast": forecast_arr,
@@ -244,4 +247,83 @@ def forecast_claims(
         "confidence_95": ci["confidence_95"],
         "model_params": model_params,
         "aic": aic_value,
+        "backtest": backtest,
     }
+
+
+def _backtest_forecast(
+    series: pd.Series,
+    holdout: int = 6,
+) -> Dict[str, Any]:
+    """Walk-forward backtest: train on all-but-last-N, forecast N, measure accuracy.
+
+    Parameters
+    ----------
+    series : pd.Series
+        Full monthly claim count series.
+    holdout : int
+        Number of months to hold out for validation.
+
+    Returns
+    -------
+    dict
+        Keys: ``mape``, ``rmse``, ``mae``, ``actual_vs_forecast``.
+    """
+    n = len(series)
+
+    if n < holdout + _MIN_MONTHS_HW:
+        # Not enough data for a meaningful backtest with HW
+        if n < holdout + 6:
+            return {"mape": None, "rmse": None, "mae": None, "actual_vs_forecast": []}
+
+    train = series.iloc[:-holdout]
+    actual = series.iloc[-holdout:]
+
+    try:
+        if len(train) >= _MIN_MONTHS_HW:
+            model = ExponentialSmoothing(
+                train, trend="add", seasonal="add",
+                seasonal_periods=_SEASONAL_PERIOD,
+                initialization_method="estimated",
+            )
+        else:
+            model = SimpleExpSmoothing(
+                train, initialization_method="estimated",
+            )
+
+        fitted = model.fit(optimized=True)
+        forecast_vals = fitted.forecast(holdout)
+        forecast_arr = np.array(forecast_vals, dtype=float)
+        actual_arr = actual.values.astype(float)
+
+        # MAPE (avoid division by zero)
+        nonzero_mask = actual_arr != 0
+        if nonzero_mask.sum() > 0:
+            mape = float(np.mean(np.abs((actual_arr[nonzero_mask] - forecast_arr[nonzero_mask]) / actual_arr[nonzero_mask])) * 100)
+        else:
+            mape = None
+
+        rmse = float(np.sqrt(np.mean((actual_arr - forecast_arr) ** 2)))
+        mae = float(np.mean(np.abs(actual_arr - forecast_arr)))
+
+        actual_vs_forecast = [
+            {
+                "date": str(actual.index[i]),
+                "actual": float(actual_arr[i]),
+                "forecast": float(forecast_arr[i]),
+            }
+            for i in range(holdout)
+        ]
+
+        logger.info("Backtest MAPE: %.1f%%, RMSE: %.1f, MAE: %.1f", mape or 0, rmse, mae)
+
+        return {
+            "mape": mape,
+            "rmse": rmse,
+            "mae": mae,
+            "actual_vs_forecast": actual_vs_forecast,
+        }
+
+    except Exception as exc:
+        logger.warning("Backtest failed: %s", exc)
+        return {"mape": None, "rmse": None, "mae": None, "actual_vs_forecast": []}

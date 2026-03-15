@@ -14,6 +14,7 @@ def create_kpi_card(
     delta: Optional[str] = None,
     delta_color: Optional[str] = None,
     sparkline_data: Optional[List[float]] = None,
+    ci_text: Optional[str] = None,
 ) -> html.Div:
     """Build a professional KPI card.
 
@@ -32,6 +33,9 @@ def create_kpi_card(
     sparkline_data : list[float], optional
         A short series of values rendered as a tiny trend line inside the
         card.  Omit to hide the sparkline.
+    ci_text : str, optional
+        Confidence interval text rendered as a small gray line below the
+        delta (e.g. "95% CI: $1.15M - $1.25M").
 
     Returns
     -------
@@ -60,6 +64,12 @@ def create_kpi_card(
                 className="kpi-delta",
                 style={"color": color},
             )
+        )
+
+    # Optional confidence interval text
+    if ci_text is not None:
+        children.append(
+            html.Span(ci_text, className="kpi-ci-text")
         )
 
     # Optional sparkline

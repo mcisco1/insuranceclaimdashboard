@@ -9,14 +9,15 @@ from dash.dependencies import Input, Output
 # ── Navigation structure ──────────────────────────────────────────────────────
 
 _NAV_ITEMS = [
-    {"path": "/", "label": "Executive Overview", "icon": "\u2302"},
-    {"path": "/loss-trends", "label": "Loss Trends", "icon": "\u2197"},
-    {"path": "/geographic-risk", "label": "Geographic & Department Risk", "icon": "\u2609"},
-    {"path": "/operational-efficiency", "label": "Operational Efficiency", "icon": "\u2699"},
-    {"path": "/loss-development", "label": "Loss Development", "icon": "\u2237"},
-    {"path": "/forecasting", "label": "Forecasting & Anomalies", "icon": "\u2A01"},
-    {"path": "/scenario-analysis", "label": "Scenario Analysis", "icon": "\u2318"},
-    {"path": "/recommendations", "label": "Recommendations", "icon": "\u2714"},
+    {"path": "/", "label": "Executive Overview", "icon": "H"},
+    {"path": "/loss-trends", "label": "Loss Trends", "icon": "T"},
+    {"path": "/geographic-risk", "label": "Geographic & Department Risk", "icon": "G"},
+    {"path": "/operational-efficiency", "label": "Operational Efficiency", "icon": "O"},
+    {"path": "/loss-development", "label": "Loss Development", "icon": "L"},
+    {"path": "/forecasting", "label": "Forecasting & Anomalies", "icon": "F"},
+    {"path": "/scenario-analysis", "label": "Scenario Analysis", "icon": "S"},
+    {"path": "/recommendations", "label": "Recommendations", "icon": "R"},
+    {"path": "/data-quality", "label": "Data Quality", "icon": "Q"},
 ]
 
 

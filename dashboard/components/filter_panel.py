@@ -12,6 +12,8 @@ def create_filter_panel(
     claim_types: List[str],
     severities: List[int],
     regions: List[str],
+    min_date: str = None,
+    max_date: str = None,
 ) -> html.Div:
     """Build a compact horizontal filter bar.
 
@@ -28,6 +30,10 @@ def create_filter_panel(
         Distinct severity levels (typically 1-5).
     regions : list[str]
         Distinct region names.
+    min_date : str, optional
+        Earliest selectable date for date range picker (YYYY-MM-DD).
+    max_date : str, optional
+        Latest selectable date for date range picker (YYYY-MM-DD).
 
     Returns
     -------
@@ -41,8 +47,28 @@ def create_filter_panel(
     ]
     region_options = [{"label": r, "value": r} for r in sorted(regions)]
 
+    # Date range picker kwargs
+    date_picker_kwargs = {"id": "filter-date-range"}
+    if min_date:
+        date_picker_kwargs["min_date_allowed"] = min_date
+    if max_date:
+        date_picker_kwargs["max_date_allowed"] = max_date
+
     return html.Div(
         [
+            # Date range picker
+            html.Div(
+                [
+                    html.Label("Date Range", className="filter-label"),
+                    dcc.DatePickerRange(
+                        display_format="YYYY-MM-DD",
+                        start_date_placeholder_text="Start",
+                        end_date_placeholder_text="End",
+                        **date_picker_kwargs,
+                    ),
+                ],
+                className="filter-group",
+            ),
             # Year selector
             html.Div(
                 [

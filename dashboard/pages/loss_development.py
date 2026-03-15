@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 from dash import Input, Output, State, dash_table, dcc, html
 from dash.exceptions import PreventUpdate
 
-from dashboard.components import create_download_button, create_kpi_card
+from dashboard.components import create_download_button, create_kpi_card, create_info_tooltip
 
 # ---------------------------------------------------------------------------
 # Colour palette
@@ -84,6 +84,7 @@ def layout(data_store) -> html.Div:
     ultimate_losses = loss_tri.get("ultimate_losses", {})
     ibnr_reserves = loss_tri.get("ibnr_reserves", {})
     age_to_age = loss_tri.get("age_to_age_factors", {})
+    mack_se = loss_tri.get("mack_standard_errors", {})
 
     # ── Build heatmap figure ──────────────────────────────────────────
     if not triangle_df.empty:
@@ -204,12 +205,20 @@ def layout(data_store) -> html.Div:
                 hovertemplate="<b>AY %{x}</b><br>Current Paid: $%{y:,.0f}<extra></extra>",
             )
         )
+        # Compute error bars from Mack SEs
+        error_bars = []
+        for ay_str in bar_years:
+            mack_data = mack_se.get(ay_str, {})
+            se = mack_data.get("se")
+            error_bars.append(1.96 * se if se is not None else 0)
+
         ultimate_bar_fig.add_trace(
             go.Bar(
                 x=bar_years,
                 y=ultimate_vals,
                 name="Ultimate Loss",
                 marker_color=ACCENT,
+                error_y=dict(type="data", array=error_bars, visible=True, color="#636e72"),
                 hovertemplate="<b>AY %{x}</b><br>Ultimate: $%{y:,.0f}<extra></extra>",
             )
         )
@@ -234,21 +243,37 @@ def layout(data_store) -> html.Div:
             current = data.get("current_paid", 0.0) or 0.0
             ultimate = data.get("ultimate")
             ibnr = data.get("ibnr")
+            mack_data = mack_se.get(ay_str, {})
+            se = mack_data.get("se")
+            ci_lo = mack_data.get("ci_lower")
+            ci_hi = mack_data.get("ci_upper")
 
             ibnr_rows.append({
                 "Accident Year": ay_str.upper() if ay_str == "total" else ay_str,
                 "Paid to Date ($)": f"${current:,.0f}",
                 "Ultimate ($)": f"${ultimate:,.0f}" if ultimate is not None else "N/A",
                 "IBNR Reserve ($)": f"${ibnr:,.0f}" if ibnr is not None else "N/A",
+                "SE ($)": f"${se:,.0f}" if se is not None else "N/A",
+                "95% CI ($)": f"${ci_lo:,.0f} - ${ci_hi:,.0f}" if ci_lo is not None and ci_hi is not None else "N/A",
             })
 
     ibnr_table_df = pd.DataFrame(ibnr_rows) if ibnr_rows else pd.DataFrame(
-        columns=["Accident Year", "Paid to Date ($)", "Ultimate ($)", "IBNR Reserve ($)"]
+        columns=["Accident Year", "Paid to Date ($)", "Ultimate ($)", "IBNR Reserve ($)", "SE ($)", "95% CI ($)"]
     )
 
     return html.Div(
         [
-            html.H2("Loss Development Triangle & IBNR Analysis", className="page-title"),
+            html.H2(
+                [
+                    "Loss Development Triangle & IBNR Analysis",
+                    create_info_tooltip(
+                        "Chain-ladder cumulative development factors. Mack (1993) standard errors "
+                        "provide prediction intervals for IBNR reserves.",
+                        "lossdev-tooltip",
+                    ),
+                ],
+                className="page-title",
+            ),
 
             # Row 1: Heatmap (full width)
             html.Div(
@@ -320,6 +345,22 @@ def layout(data_store) -> html.Div:
                                     "if": {"filter_query": '{Accident Year} = "TOTAL"'},
                                     "backgroundColor": "rgba(15, 52, 96, 0.08)",
                                     "fontWeight": "bold",
+                                },
+                                {
+                                    "if": {
+                                        "column_id": "IBNR Reserve ($)",
+                                        "filter_query": '{Accident Year} != "TOTAL"',
+                                    },
+                                    "color": ACCENT,
+                                    "fontWeight": "600",
+                                },
+                                {
+                                    "if": {
+                                        "column_id": "Ultimate ($)",
+                                        "filter_query": '{Accident Year} != "TOTAL"',
+                                    },
+                                    "color": PRIMARY,
+                                    "fontWeight": "600",
                                 },
                             ],
                             sort_action="native",

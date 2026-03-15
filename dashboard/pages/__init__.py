@@ -14,6 +14,7 @@ from dashboard.pages import (
     forecasting_anomalies,
     scenario_analysis,
     recommendations,
+    data_quality,
 )
 
 PAGE_MODULES = {
@@ -25,4 +26,5 @@ PAGE_MODULES = {
     '/forecasting': forecasting_anomalies,
     '/scenario-analysis': scenario_analysis,
     '/recommendations': recommendations,
+    '/data-quality': data_quality,
 }
