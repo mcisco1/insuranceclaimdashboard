@@ -75,10 +75,52 @@ class DataStore:
         url = db_url or DB_URL
         engine = get_engine(url)
 
-        # Load the full claims summary (fact + all dimensions)
-        query = text("SELECT * FROM v_claims_summary")
-        with engine.connect() as conn:
-            self.claims_df: pd.DataFrame = pd.read_sql(query, conn)
+        # Load the full claims summary (fact + all dimensions).
+        # Try the v_claims_summary view first; if the DB file or the view
+        # does not exist yet, fall back to an inline join.  If even the
+        # underlying tables are missing, surface a clear error message.
+        _FALLBACK_SQL = """
+        SELECT
+            f.claim_id, f.incident_date, f.report_date, f.close_date,
+            f.claim_type, f.procedure_category, f.severity_level,
+            f.status, f.paid_amount, f.incurred_amount, f.reserved_amount,
+            f.days_to_close, f.days_to_report, f.patient_age_band,
+            f.patient_risk_segment, f.repeat_event_flag, f.litigation_flag,
+            f.accident_year, f.development_year,
+            p.provider_id, p.provider_name, p.specialty, p.department, p.risk_tier,
+            r.state_code, r.state_name, r.region, r.urban_rural,
+            d.diagnosis_code, d.diagnosis_category, d.severity_weight,
+            rc.root_cause_code, rc.root_cause_category, rc.preventability,
+            ROUND(f.paid_amount / NULLIF(f.incurred_amount, 0), 4) AS loss_ratio,
+            ROUND(f.reserved_amount - f.paid_amount, 2) AS reserve_adequacy,
+            SUBSTR(f.incident_date, 1, 7) AS incident_month,
+            CASE WHEN f.severity_level >= 4 THEN 1 ELSE 0 END AS is_high_severity,
+            CASE WHEN f.days_to_close > 365 THEN 1 ELSE 0 END AS is_long_tail
+        FROM fact_claim f
+        JOIN dim_provider   p  ON f.provider_key   = p.provider_key
+        JOIN dim_region     r  ON f.region_key     = r.region_key
+        JOIN dim_diagnosis  d  ON f.diagnosis_key  = d.diagnosis_key
+        JOIN dim_root_cause rc ON f.root_cause_key = rc.root_cause_key
+        """
+
+        try:
+            with engine.connect() as conn:
+                self.claims_df: pd.DataFrame = pd.read_sql(
+                    text("SELECT * FROM v_claims_summary"), conn
+                )
+        except Exception:
+            try:
+                with engine.connect() as conn:
+                    self.claims_df = pd.read_sql(text(_FALLBACK_SQL), conn)
+            except Exception as exc:
+                raise RuntimeError(
+                    "Could not load claims data. The database or required "
+                    "tables/views do not exist yet. Run the full pipeline "
+                    "first:  python run.py  (or at minimum: "
+                    "python run.py --step generate && "
+                    "python run.py --step clean && "
+                    "python run.py --step load)"
+                ) from exc
 
         print(
             f"[DataStore] Loaded {len(self.claims_df):,} claims "
@@ -144,33 +186,19 @@ def create_app(data_store: Optional[DataStore] = None) -> Dash:
     )
 
     # ── URL-based routing ─────────────────────────────────────────────────
-    # Page modules are imported lazily inside the callback to avoid circular
-    # imports (each page module may reference components from this package).
+    # Uses the centralized PAGE_MODULES registry from dashboard.pages so
+    # that adding a new page only requires updating the registry.
     @app.callback(
         Output("page-content", "children"),
         Input("url", "pathname"),
     )
     def _route(pathname: str):
-        from dashboard.pages import (  # noqa: F811
-            executive_overview,
-            loss_trends,
-            geographic_risk,
-            operational_efficiency,
-            loss_development,
-            forecasting_anomalies,
-            scenario_analysis,
-            recommendations,
-        )
+        from dashboard.pages import PAGE_MODULES  # noqa: F811
 
+        # Build routes dict: path -> layout attribute of each module
         routes = {
-            "/": executive_overview.layout,
-            "/loss-trends": loss_trends.layout,
-            "/geographic-risk": geographic_risk.layout,
-            "/operational-efficiency": operational_efficiency.layout,
-            "/loss-development": loss_development.layout,
-            "/forecasting": forecasting_anomalies.layout,
-            "/scenario-analysis": scenario_analysis.layout,
-            "/recommendations": recommendations.layout,
+            path: module.layout
+            for path, module in PAGE_MODULES.items()
         }
 
         page_factory = routes.get(pathname, routes["/"])
@@ -188,28 +216,14 @@ def create_app(data_store: Optional[DataStore] = None) -> Dash:
 
 
 def _register_page_callbacks(app: Dash, data_store: DataStore) -> None:
-    """Import every page module and call its ``register_callbacks`` hook."""
-    from dashboard.pages import (  # noqa: F811
-        executive_overview,
-        loss_trends,
-        geographic_risk,
-        operational_efficiency,
-        loss_development,
-        forecasting_anomalies,
-        scenario_analysis,
-        recommendations,
-    )
+    """Import every page module and call its ``register_callbacks`` hook.
 
-    for module in (
-        executive_overview,
-        loss_trends,
-        geographic_risk,
-        operational_efficiency,
-        loss_development,
-        forecasting_anomalies,
-        scenario_analysis,
-        recommendations,
-    ):
+    Uses the centralized PAGE_MODULES registry so new pages are
+    automatically picked up.
+    """
+    from dashboard.pages import PAGE_MODULES  # noqa: F811
+
+    for module in PAGE_MODULES.values():
         if hasattr(module, "register_callbacks"):
             module.register_callbacks(app, data_store)
 

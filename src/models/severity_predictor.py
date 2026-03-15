@@ -226,7 +226,6 @@ def train_severity_model(
         ("scaler", StandardScaler()),
         ("clf", LogisticRegression(
             max_iter=1000,
-            multi_class="multinomial",
             solver="lbfgs",
             class_weight="balanced",
             random_state=seed,
